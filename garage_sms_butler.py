@@ -1,3 +1,4 @@
+#!/usr/bin/python
 # Garage door opening SMS code developed by Akira Fist, August 2014
 
 # Prereqs:
@@ -11,22 +12,27 @@ import RPi.GPIO as GPIO
 import MySQLdb
 import datetime
 import time
+import os
+import smtplib
 from contextlib import closing
 from twilio.rest import TwilioRestClient
 
-GPIO.setmode(GPIO.BCM) 
+GPIO.setmode(GPIO.BCM)
 GPIO.setup(23, GPIO.OUT)
 
 # VARIABLES
 
 # CHANGE THESE VARIABLES TO YOUR OWN SETTINGS!
 # Insert your own account's SID and auth_token from Twilio's account page
-twilio_account_sid = "xxxxxxxxxxxxxxxxxxxxxxx"
-twilio_auth_token = "yyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+twilio_account_sid = "xxxxxxxxxxxxxxxxxxxx"
+twilio_auth_token = "ttttttttttttttttttttttt"
 # The phone number you purchased from Twilio
 sTwilioNumber = "+12145551212"
-# Your cell number
-sHomeOwnerNumber = "+14695551212"
+# Gmail information - for informing homeowner that garage activity happened
+sHomeOwnerEmail = "homeowner@gmail.com"
+sGmailAddress = "myemail@gmail.com"
+sGmailLogin = "mygmailogin"
+sGmailPassword = "mygmailpassword"
 
 iNumOpenings = 0
 iStatusEnabled = 1
@@ -45,6 +51,15 @@ lstAuthorized = list() # authorized phone numbers, that can open the garage
 # Connect to local MySQL database
 con = MySQLdb.connect('localhost', 'garage', 'garagepassword', 'GarageDoor')
 
+# Email the home owner with any status updates
+def SendGmailToHomeOwner(sMsg):
+  connect = server = smtplib.SMTP('smtp.gmail.com:587')
+  starttls = server.starttls()
+  login = server.login(sGmailLogin,sGmailPassword)
+  message = 'Subject: GARAGE: %s\n\n%s' % (sMsg, sMsg)
+  sendit = server.sendmail(sGmailAddress, sHomeOwnerEmail, message)
+  server.quit()
+  
 try:
   # Store authorized phone numbers in a List, so we don't waste SQL resources repeatedly querying tables
   with closing(con.cursor()) as authorized_cursor:
@@ -101,23 +116,25 @@ while 1==1:
             if p.body.lower() == "kill":
               print "{0} Received KILL command from phone number {1} - bailing now!".format(time.strftime("%x %X"), p.from_)
               sms = client.sms.messages.create(body="Received KILL command from you.  Bailing to terminal now!",to=p.from_,from_=sTwilioNumber)
-              sms = client.sms.messages.create(body="Received KILL command from phone number {0}.  Exiting application!".format(p.from_),to=sHomeOwnerNumber,from_=sTwilioNumber)
+              SendGmailToHomeOwner("Received KILL command from phone number {0}.  Exiting application!".format(p.from_))
               exit(3)
 
             if p.body.lower() == "disable":
               iStatusEnabled = 0
               print "{0} Received STOP command from phone number {1}, now disabled.  Send START to restart".format(time.strftime("%x %X"), p.from_)
               sms = client.sms.messages.create(body="Received STOP command from you.  Send START to restart",to=p.from_,from_=sTwilioNumber)
-              sms = client.sms.messages.create(body="Received STOP command from phone number {0}.  Send START to restart".format(p.from_),to=sHomeOwnerNumber,from_=sTwilioNumber)
+              SendGmailToHomeOwner("Received STOP command from phone number {0}.  Send START to restart".format(p.from_))
 
             if p.body.lower() == "enable":
               iStatusEnabled = 1
               print "{0} Received START command from phone number {1}.  Service is now enabled".format(time.strftime("%x %X"), p.from_)
               sms = client.sms.messages.create(body="Received START command from you.  Service is now enabled",to=p.from_,from_=sTwilioNumber)
-              sms = client.sms.messages.create(body="Received START command from phone number {0}.  Service is now enabled".format(p.from_),to=sHomeOwnerNumber,from_=sTwilioNumber)
+              SendGmailToHomeOwner("Received START command from phone number {0}.  Service is now enabled".format(p.from_))
 
             if p.body.lower() == "status":
               if iStatusEnabled == 1:
+                # Take picture using Raspberry Pi camera
+                os.system("raspistill -o /home/pi/garagepic.jpg")
                 print "{0} Status requested from {1}, replied".format(time.strftime("%x %X"), p.from_)
                 sms = client.sms.messages.create(body="ENABLED.  Status reply: {0}".format(sLastCommand),to=p.from_,from_=sTwilioNumber)
               else:
@@ -131,24 +148,29 @@ while 1==1:
                 print "{0} Now opening garage for phone number {1}".format(time.strftime("%x %X"), p.from_)
 
                 # OPEN GARAGE DOOR HERE
-                GPIO.output(23, True)
-                time.sleep(10)
+                GPIO.output(23, GPIO.HIGH)
+                time.sleep(1)
+                GPIO.output(23, GPIO.LOW)
 
                 sms = client.sms.messages.create(body="Command received, and sent to garage door",to=p.from_,from_=sTwilioNumber)
                 print "{0} SMS response sent to authorized user {1}".format(time.strftime("%x %X"), p.from_)
             
-                # Replace FROM phone number with your Twilio account's number
-                # Replace TO phone with the home owner's number, format: +1 then area code + number
-                sms = client.sms.messages.create(body="Garage opened from phone {0}".format(p.from_),to=sHomeOwnerNumber,from_=sTwilioNumber)
-                print "{0} SMS sent to home owner with SMS ID = {1}".format(time.strftime("%x %X"), sms.sid)
+                SendGmailToHomeOwner("Garage opened from phone {0}".format(p.from_))
+                print "{0} Email sent to home owner".format(time.strftime("%x %X"))
               else:
                 print "{0} Open request received from {1} but SERVICE IS DISABLED!".format(time.strftime("%x %X"), p.from_)
           else: # This phone number is not authorized.  Report possible intrusion to home owner
             print "{0} Unauthorized user tried to access system: {1}".format(time.strftime("%x %X"), p.from_)
-            sms = client.sms.messages.create(body="Unauthorized phone tried opening garage: {0}".format(p.from_),to=sHomeOwnerNumber,from_=sTwilioNumber)
-            print "{0} SMS sent to home owner with SMS ID = {1}".format(time.strftime("%x %X"), sms.sid)
-            
+            SendGmailToHomeOwner("Unauthorized phone tried opening garage: {0}".format(p.from_))
+            print "{0} Email sent to home owner".format(time.strftime("%x %X"))
+
+  except KeyboardInterrupt:  
+    GPIO.cleanup() # clean up GPIO on CTRL+C exit  
+    exit(4)
+  
   except:
     print "Error occurred, bailing to terminal"
+    GPIO.cleanup()  
     exit(1)
     
+GPIO.cleanup()  
