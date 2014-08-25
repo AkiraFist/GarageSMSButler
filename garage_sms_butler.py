@@ -94,12 +94,12 @@ def TakeVideoAndUpload():
     # Give 10 seconds to garage to raise up
     time.sleep(10)
     # Now take 60 seconds of video, to see who's coming inside
-    sVideoCommand = "raspivid -w 640 -h 480 -o {0} -t 60000".format(sVideoFile)
+    sVideoCommand = "raspivid -w 640 -h 480 -o /home/pi/movies/{0} -t 60000".format(sVideoFile)
     os.system(sVideoCommand)
     ftp = FTP(sFTPHost,sFTPUserName,sFTPPassword)    
     ftp.storbinary("stor {0}".format(sVideoFile), open("/home/pi/movies/{0}".format(sVideoFile),'rb'),blocksize=1024)
     # It uploaded ok, so delete the video file to avoid clogging up SD card space
-    os.system("sudo rm {0}".format(sVideoFile))
+    os.system("sudo rm /home/pi/movies/{0}".format(sVideoFile))
   except:
     print "Error inside function TakeVideoAndUpload"
     pass
